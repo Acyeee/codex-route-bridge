@@ -1,0 +1,15 @@
+# Build output
+src/engine/codex-route-bridge.exe
+*.exe
+*.pdb
+
+# Python
+__pycache__/
+*.pyc
+
+# Local state never belongs in the repo
+profiles.json
+active-profile.json
+credentials/
+*.dpapi
+*.bak
