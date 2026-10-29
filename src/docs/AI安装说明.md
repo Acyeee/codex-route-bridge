@@ -29,8 +29,8 @@ winget install -e --id OpenJS.NodeJS.LTS
 ## 2. 获取代码并编译
 
 ```powershell
-git clone https://github.com/Acyeee/codex-quota-boost.git
-cd codex-quota-boost
+git clone https://github.com/Acyeee/codex-route-bridge.git
+cd codex-route-bridge
 .\src\build.ps1                                      # 用 Windows 自带的 .NET Framework 编译桥接程序
 .\src\engine\codex-route-bridge.exe --self-test      # 应输出 Route contract checks passed
 python -I src\tests\test_desktop_helper.py           # 应全部通过
@@ -68,4 +68,4 @@ python -I src\tests\test_desktop_helper.py           # 应全部通过
 | `上游返回 HTTP 404` | API 地址通常需要以 `/v1` 结尾 |
 | 一直提示旧实例未退出 | 让用户在托盘里完全退出 Codex 后重试 |
 
-更多细节见 [docs/技术说明.md](docs/技术说明.md)。
+更多细节见 [技术说明.md](技术说明.md)。
