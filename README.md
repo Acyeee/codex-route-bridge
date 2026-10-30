@@ -21,7 +21,7 @@ Codex 的 Plus 额度经常不够用。直接改成 API Key 登录的话，官�
 ## 下载使用（推荐）
 
 1. 到 [Releases](https://github.com/Acyeee/codex-route-bridge/releases/latest) 下载 `XiaoluluCodexHelper-…-windows-x64.zip`，解压整个文件夹；
-2. 安装 [Python 3](https://www.python.org/downloads/)（勾选 “Add python.exe to PATH”）。不会装可以让你的 AI 助手帮忙；
+2. 安装 [Python 3](https://www.python.org/downloads/)（勾选 “Add python.exe to PATH”）和 [Node.js](https://nodejs.org/)。不会装可以让你的 AI 助手帮忙；
 3. 双击「小噜噜Codex助手.exe」→ 左侧「线路管理」→ 添加第三方 API → 启动 Codex。之后在 Codex 自带的模型选择器里切换模型即可。
 
 想回到官方 Plus，选回「官方订阅」再重启 Codex 就行。
@@ -41,7 +41,7 @@ oute-switch\` 和本项目文件夹。
 
 ## 使用须知
 
-本项目仅供个人在自己的电脑上使用，请使用本人的 ChatGPT 账号和有权使用的第三方 API，并遵守 OpenAI 及所用服务商的条款。以 MIT 许可证免费开源，按现状提供，不作任何担保；Codex 更新后可能需要等待适配。本项目与 OpenAI 无关，Codex、ChatGPT 是 OpenAI 的商标。
+本项目仅供个人在自己的电脑上使用，请使用本人的 ChatGPT 账号和有权使用的第三方 API，并遵守 OpenAI 及所用服务商的条款。以 MIT 许可证免费开源，按现状提供，不作任何担保；Codex 更新后会自动适配，个别版本改动较大时可能需要等待本项目更新。本项目与 OpenAI 无关，Codex、ChatGPT 是 OpenAI 的商标。
 
 ---
 
