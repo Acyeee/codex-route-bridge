@@ -30,7 +30,8 @@ Codex 的 Plus 额度经常不够用。直接改成 API Key 登录的话，官�
 
 ## 命令行版
 
-不想装图形界面的话，点右上角 **Code → Download ZIP** 下载本仓库，双击 `codex-route.cmd`：按 `a` 添加第三方 API，输入编号即可切换。卸载时删除 `%USERPROFILE%\.codexoute-switch\` 和本项目文件夹。
+不想装图形界面的话，点右上角 **Code → Download ZIP** 下载本仓库，双击 `codex-route.cmd`：按 `a` 添加第三方 API，输入编号即可切换。卸载时删除 `%USERPROFILE%\.codex
+oute-switch\` 和本项目文件夹。
 
 | 文件 | 用途 |
 |---|---|
@@ -42,6 +43,6 @@ Codex 的 Plus 额度经常不够用。直接改成 API Key 登录的话，官�
 
 本项目仅供个人在自己的电脑上使用，请使用本人的 ChatGPT 账号和有权使用的第三方 API，并遵守 OpenAI 及所用服务商的条款。以 MIT 许可证免费开源，按现状提供，不作任何担保；Codex 更新后可能需要等待适配。本项目与 OpenAI 无关，Codex、ChatGPT 是 OpenAI 的商标。
 
-## 赞助
+---
 
-需要稳定的第三方 API？可以试试作者自己运营的 [小噜噜 API（xiaolulu.cc）](https://xiaolulu.cc)，兼容 OpenAI 接口，可直接添加到本工具中使用。
+<sub>作者另外提供 [小噜噜 API](https://xiaolulu.cc) 和 AI 订阅代充服务，有需要可以联系我。</sub>
