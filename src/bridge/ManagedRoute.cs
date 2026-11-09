@@ -14,6 +14,117 @@ class ManagedRoute {
     // Relay model catalog: every model the route offers, shown in the desktop picker.
     static List<string> Models = new List<string>();
     static readonly HashSet<string> ModelLists = new HashSet<string>();
+    // account/rateLimits/read requests awaiting a reply; relay only.
+    static readonly HashSet<string> RateReads = new HashSet<string>();
+    // The official ChatGPT quota does not apply to relay turns. Report it as available
+    // so the desktop neither locks the composer nor shows the usage banner.
+    static void ClearQuota(object node) {
+        var map = node as Dictionary<string, object>;
+        if (map != null) {
+            foreach (string k in new List<string>(map.Keys)) {
+                object v = map[k];
+                if (k == "usedPercent") map[k] = 0;
+                else if (k == "rateLimitReachedType") map[k] = null;
+                else if (v is bool && (bool)v && (k.EndsWith("Reached") || k.EndsWith("Exceeded") || k.EndsWith("Limited"))) map[k] = false;
+                else if ((k == "hasCredits" || k.EndsWith("Allowed")) && v is bool) map[k] = true;
+                else ClearQuota(v);
+            }
+            return;
+        }
+        var list = node as object[];
+        if (list != null) foreach (object item in list) ClearQuota(item);
+        var arr = node as System.Collections.ArrayList;
+        if (arr != null) foreach (object item in arr) ClearQuota(item);
+    }
+    // Account plane for the relay. With the relay as the configured provider the server
+    // has no ChatGPT login, so the desktop shows onboarding, hides projects and cannot get
+    // its auth token. A second official server (native provider, never used for turns)
+    // answers the account requests; thread and turn traffic still goes to the relay server.
+    static readonly string[] NativeMethods = { "getAuthStatus", "account/read", "account/usage/read",
+        "account/workspaceMessages/read", "account/rateLimits/read" };
+    static readonly ManualResetEvent NativeReady = new ManualResetEvent(false);
+    static volatile bool NativeOk;
+    static TextWriter NativeIn;
+    static Process Native;
+    static readonly object NativeGate = new object();
+    static readonly Dictionary<string, object[]> NativePending = new Dictionary<string, object[]>();
+    static int NativeSeq;
+    static TextWriter Out;
+    static readonly object OutGate = new object();
+    static void Emit(string line) { lock (OutGate) { Out.WriteLine(line); } }
+    static void StartNative() {
+        try {
+            var args = new List<string>(); Config(args, "model_provider", "\"openai\""); args.Add("app-server");
+            var start = new ProcessStartInfo(Real, string.Join(" ", args.ToArray()));
+            start.UseShellExecute = false; start.CreateNoWindow = true;
+            start.RedirectStandardInput = start.RedirectStandardOutput = start.RedirectStandardError = true;
+            start.EnvironmentVariables["CODEX_CLI_PATH"] = Real;
+            Native = Process.Start(start);
+            Native.ErrorDataReceived += delegate { }; Native.BeginErrorReadLine();
+            var writer = new StreamWriter(Native.StandardInput.BaseStream, new UTF8Encoding(false)); writer.AutoFlush = true;
+            NativeIn = writer;
+            var reader = new StreamReader(Native.StandardOutput.BaseStream, new UTF8Encoding(false));
+            var pump = new Thread(delegate() {
+                try { string line; while ((line = reader.ReadLine()) != null) NativeLine(line); } catch { }
+                NativeOk = false; NativeReady.Set();
+            }); pump.IsBackground = true; pump.Start();
+            lock (NativeGate) { writer.WriteLine("{\"id\":\"route-init\",\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"route-bridge\",\"title\":\"route-bridge\",\"version\":\"1\"}}}"); }
+            NativeTimer = new Timer(delegate { NativeReady.Set(); }, null, 20000, Timeout.Infinite);
+        } catch { NativeReady.Set(); }
+    }
+    static Timer NativeTimer;
+    static void NativeLine(string line) {
+        try {
+            var message = Json().DeserializeObject(line) as Dictionary<string, object>;
+            if (message == null) return;
+            object value;
+            if (message.TryGetValue("method", out value)) {
+                string method = value as string;
+                if (method == "account/updated" || method == "account/login/completed") Emit(line);
+                else if (method == "account/rateLimits/updated" && message.TryGetValue("params", out value)) { ClearQuota(value); Emit(Json().Serialize(message)); }
+                return;
+            }
+            if (!message.TryGetValue("id", out value)) return;
+            string key = Json().Serialize(value);
+            if (key == "\"route-init\"") {
+                lock (NativeGate) { NativeIn.WriteLine("{\"method\":\"initialized\"}"); }
+                NativeOk = !message.ContainsKey("error"); NativeReady.Set(); return;
+            }
+            object[] pending;
+            lock (Gate) { if (!NativePending.TryGetValue(key, out pending)) return; NativePending.Remove(key); }
+            message["id"] = pending[0];
+            if ((string)pending[1] == "account/rateLimits/read" && message.TryGetValue("result", out value)) ClearQuota(value);
+            Emit(Json().Serialize(message));
+        } catch { }
+    }
+    static bool ToNative(Dictionary<string, object> message, string method) {
+        object id;
+        if (!message.TryGetValue("id", out id) || !NativeReady.WaitOne(20000) || !NativeOk || NativeIn == null) return false;
+        string nid = "route-" + Interlocked.Increment(ref NativeSeq);
+        string key = Json().Serialize(nid);
+        lock (Gate) { NativePending[key] = new object[] { id, method }; }
+        message["id"] = nid;
+        try { lock (NativeGate) { NativeIn.WriteLine(Json().Serialize(message)); } return true; }
+        catch { lock (Gate) { NativePending.Remove(key); } message["id"] = id; return false; }
+    }
+    static string RelayQuota(string line) {
+        if (Provider != "route_relay" || line.IndexOf("ateLimit", StringComparison.Ordinal) < 0 && RateReads.Count == 0) return line;
+        try {
+            var message = Json().DeserializeObject(line) as Dictionary<string, object>;
+            if (message == null) return line;
+            object value;
+            if (message.TryGetValue("method", out value)) {
+                if ((value as string) != "account/rateLimits/updated" || !message.TryGetValue("params", out value)) return line;
+                ClearQuota(value);
+                return Json().Serialize(message);
+            }
+            if (!message.TryGetValue("id", out value)) return line;
+            lock (Gate) { if (!RateReads.Remove(Json().Serialize(value))) return line; }
+            if (!message.TryGetValue("result", out value)) return line;
+            ClearQuota(value);
+            return Json().Serialize(message);
+        } catch { return line; }
+    }
     const string RelayModelDescription = "中转线路模型";
     static JavaScriptSerializer Json() { return new JavaScriptSerializer { MaxJsonLength = int.MaxValue }; }
     static bool CompleteBundle(string directory) {
@@ -91,6 +202,11 @@ class ManagedRoute {
             if (relay && Models.Count > 0 && message.TryGetValue("id", out value)) lock (Gate) { ModelLists.Add(Json().Serialize(value)); }
             return line;
         }
+        if (relay && Array.IndexOf(NativeMethods, method) >= 0 && ToNative(message, method)) return null;
+        if (relay && method == "account/rateLimits/read") {
+            if (message.TryGetValue("id", out value)) lock (Gate) { RateReads.Add(Json().Serialize(value)); }
+            return line;
+        }
         bool thread = method == "thread/start" || method == "thread/resume" || method == "thread/fork";
         if (!thread && !(relay && method == "turn/start")) return line;
         var parameters = message.TryGetValue("params", out value) ? value as Dictionary<string, object> : null;
@@ -109,6 +225,9 @@ class ManagedRoute {
     }
     static string Respond(string line) {
         Confirm(line);
+        line = RelayQuota(line);
+        // The relay server's own (empty) account state must not override the native one.
+        if (NativeOk && line.IndexOf("\"account/updated\"", StringComparison.Ordinal) >= 0) return null;
         lock (Gate) { if (ModelLists.Count == 0) return line; }
         try {
             var message = Json().DeserializeObject(line) as Dictionary<string, object>;
@@ -218,6 +337,27 @@ class ManagedRoute {
                 || (rows[1] as Dictionary<string, object>)["supportedReasoningEfforts"] == null) return 11;
             string unrelated = "{\"id\":9,\"result\":{\"data\":[]}}";
             if (Respond(unrelated) != unrelated) return 12;
+            // Relay quota: official exhaustion is reported as available, both on read and on push.
+            Route("{\"id\":20,\"method\":\"account/rateLimits/read\",\"params\":null}");
+            string read = Respond("{\"id\":20,\"result\":{\"rateLimits\":{\"primary\":{\"usedPercent\":100},\"rateLimitReachedType\":\"rate_limit_reached\",\"spendControlReached\":true,\"credits\":{\"hasCredits\":false,\"unlimited\":false}},\"rateLimitsByLimitId\":{\"codex\":{\"secondary\":{\"usedPercent\":100}}}}}");
+            if (read.Contains("100") || read.Contains("rate_limit_reached") || read.Contains("spendControlReached\":true") || read.Contains("hasCredits\":false")) return 13;
+            string push = Respond("{\"method\":\"account/rateLimits/updated\",\"params\":{\"rateLimits\":{\"primary\":{\"usedPercent\":97},\"rateLimitReachedType\":\"rate_limit_reached\"}}}");
+            if (push.Contains("97") || push.Contains("rate_limit_reached")) return 14;
+            // Account plane: without a native server account requests pass through unchanged;
+            // with one they are answered under the desktop's own id, quota cleared.
+            string acctRead = "{\"id\":30,\"method\":\"account/read\",\"params\":{}}";
+            NativeReady.Set();
+            if (Route(acctRead) != acctRead) return 16;
+            var captured = new StringWriter(); Out = captured; NativeOk = true; NativeIn = new StringWriter();
+            if (Route("{\"id\":31,\"method\":\"account/rateLimits/read\",\"params\":null}") != null) return 17;
+            NativeLine("{\"id\":\"route-" + NativeSeq + "\",\"result\":{\"rateLimits\":{\"primary\":{\"usedPercent\":88},\"rateLimitReachedType\":\"rate_limit_reached\"}}}");
+            string relayed = captured.ToString();
+            if (!relayed.Contains("\"id\":31") || relayed.Contains("88") || relayed.Contains("rate_limit_reached")) return 18;
+            if (Respond("{\"method\":\"account/updated\",\"params\":{\"authMode\":null}}") != null) return 19;
+            NativeOk = false;
+            Provider = "openai";
+            string officialPush = "{\"method\":\"account/rateLimits/updated\",\"params\":{\"rateLimits\":{\"primary\":{\"usedPercent\":97}}}}";
+            if (Respond(officialPush) != officialPush) return 15;
             Console.WriteLine("Route contract checks passed"); return 0;
         }
         Real = ResolveOfficialCli();
@@ -236,10 +376,14 @@ class ManagedRoute {
             if (NodeConfigured(args)) Config(quoted, "mcp_servers.node_repl.env.CODEX_CLI_PATH", Json().Serialize(Real));
             // Keep desktop account/read on native ChatGPT authentication. Only
             // local thread start/resume/fork requests select the relay provider.
-            Config(quoted, "model_provider", Json().Serialize("openai"));
+            // Newer official CLIs reject a turn when the thread's provider differs
+            // from the server's configured provider, so the relay must be the default too.
+            Config(quoted, "model_provider", Json().Serialize(relay ? "route_relay" : "openai"));
             if (!string.IsNullOrWhiteSpace(Model)) Config(quoted, "model", Json().Serialize(Model));
+            if (relay) StartNative();
             if (relay) Config(quoted, "model_providers.route_relay", "{name=\"Managed relay\",base_url=" + Json().Serialize(baseUrl) + ",wire_api=\"responses\",env_key=\"CODEX_ROUTE_KEY\",requires_openai_auth=false,supports_websockets=false}");
         }
+        if (server) { var stdout = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false)); stdout.AutoFlush = true; Out = stdout; }
         var start = new ProcessStartInfo(Real, string.Join(" ", quoted.ToArray()));
         start.UseShellExecute = false; start.CreateNoWindow = true;
         start.EnvironmentVariables["CODEX_CLI_PATH"] = Real;
@@ -250,7 +394,7 @@ class ManagedRoute {
                     if (server) {
                         var reader = new StreamReader(Console.OpenStandardInput(), new UTF8Encoding(false));
                         var writer = new StreamWriter(child.StandardInput.BaseStream, new UTF8Encoding(false)); writer.AutoFlush = true;
-                        string line; while ((line = reader.ReadLine()) != null) writer.WriteLine(Route(line));
+                        string line; while ((line = reader.ReadLine()) != null) { string routed = Route(line); if (routed != null) writer.WriteLine(routed); }
                     } else Pump(Console.OpenStandardInput(), child.StandardInput.BaseStream);
                     child.StandardInput.Close();
                 } catch { try { child.StandardInput.Close(); } catch { } }
@@ -258,12 +402,12 @@ class ManagedRoute {
             var output = new Thread(delegate() { try {
                 if (server) {
                     var reader = new StreamReader(child.StandardOutput.BaseStream, new UTF8Encoding(false));
-                    var writer = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false)); writer.AutoFlush = true;
-                    string line; while ((line = reader.ReadLine()) != null) writer.WriteLine(Respond(line));
+                    string line; while ((line = reader.ReadLine()) != null) { string answer = Respond(line); if (answer != null) Emit(answer); }
                 } else Pump(child.StandardOutput.BaseStream, Console.OpenStandardOutput());
             } catch { } });
             var error = new Thread(delegate() { try { Pump(child.StandardError.BaseStream, Console.OpenStandardError()); } catch { } });
             output.Start(); error.Start(); child.WaitForExit(); output.Join(); error.Join();
+            if (Native != null) try { Native.Kill(); } catch { }
             return child.ExitCode;
         }
     }
